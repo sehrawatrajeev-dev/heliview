@@ -1,0 +1,799 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>HeliAssist - Helipad Assessment</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- SunCalc library for sunrise/sunset calculations -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/suncalc/1.8.0/suncalc.min.js"></script>
+    <style>
+        /* Custom font and base styling for a professional feel */
+        @import url('https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;700&display=swap');
+        body, html {
+            font-family: 'Roboto Mono', monospace;
+            height: 100%;
+            margin: 0;
+            overflow: hidden;
+            background-color: #000;
+            color: #fff;
+        }
+
+        /* The main container for the app */
+        #app-container {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+        }
+
+        /* Canvas for the live camera feed and superimposed data */
+        #main-canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            z-index: 1;
+        }
+        
+        /* A hidden video element to act as the source for the canvas */
+        #camera-source {
+            display: none;
+        }
+
+        /* Overlay container for all data and controls */
+        #overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 10;
+            display: flex;
+            flex-direction: column;
+            pointer-events: none; /* Allows clicks to go through to canvas if needed */
+        }
+        
+        #overlay > * {
+            pointer-events: auto; /* Re-enable pointer events for children */
+        }
+
+        /* Glassmorphism effect for data panels - Transparency increased to 0.2 */
+        .glass-panel {
+            background: rgba(0, 0, 0, 0.2);
+            backdrop-filter: blur(5px);
+            -webkit-backdrop-filter: blur(5px);
+            border-radius: 0.5rem;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            padding: 0.5rem;
+            margin: 0.5rem;
+            font-size: 0.8rem;
+        }
+
+        /* Direction Ribbon Styling - Transparency reduced to 0.3 */
+        #direction-ribbon-container {
+            width: 100%;
+            overflow: hidden;
+            position: relative;
+            height: 50px;
+            background: rgba(0, 0, 0, 0.3);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        #direction-ribbon {
+            height: 100%;
+            position: absolute;
+            display: flex;
+            align-items: center;
+            transition: transform 0.1s linear; /* Smooth scrolling */
+        }
+
+        .ribbon-marker {
+            width: 1px;
+            height: 15px;
+            background-color: #fff;
+            margin: 0 4px; /* 5px total spacing for 1 degree */
+        }
+
+        .ribbon-label {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            color: #fff;
+            width: 40px;
+            font-weight: bold;
+            font-size: 1rem;
+        }
+        
+        .ribbon-label .degree-text {
+            font-size: 0.7rem;
+        }
+        
+        /* Larger font size for cardinal directions */
+        .ribbon-label .cardinal-text {
+            font-size: 1.5rem;
+        }
+
+        .ribbon-label .tick-major {
+            width: 2px;
+            height: 30px;
+            background-color: #fff;
+        }
+        
+        /* Larger and wider tick for cardinal directions */
+        .ribbon-label .tick-cardinal {
+              width: 5px;
+              height: 40px;
+              background-color: #10B981; /* Green for cardinals */
+        }
+        
+        /* Center marker for the current heading */
+        #heading-indicator {
+            position: absolute;
+            top: 0;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 3px;
+            height: 50px;
+            background-color: #EF4444; /* Red indicator */
+            z-index: 11;
+        }
+
+        /* Custom button styles */
+        .control-button {
+            width: 64px;
+            height: 64px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border: 4px solid white;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.4);
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        .control-button:active {
+            transform: scale(0.95);
+        }
+        
+        #record-button.recording {
+              animation: pulse 1.5s infinite;
+        }
+        
+        @keyframes pulse {
+            0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); }
+            70% { box-shadow: 0 0 0 10px rgba(239, 68, 68, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+        }
+
+        /* Saved assessments list */
+        #saved-list {
+            max-height: 25vh;
+            overflow-y: auto;
+        }
+        
+        /* Scrollbar styling */
+        #saved-list::-webkit-scrollbar { width: 5px; }
+        #saved-list::-webkit-scrollbar-track { background: rgba(255,255,255,0.1); }
+        #saved-list::-webkit-scrollbar-thumb { background: #10B981; border-radius: 5px; }
+
+        /* Download Modal */
+        #download-modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            backdrop-filter: blur(5px);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 100;
+        }
+
+        #download-modal .content {
+            background-color: #2a2a2a;
+            padding: 2rem;
+            border-radius: 0.75rem;
+            text-align: center;
+            max-width: 90%;
+            width: 400px;
+        }
+
+        #download-modal .actions {
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+            align-items: center;
+            justify-content: center;
+        }
+
+        #download-modal .actions a {
+            padding: 0.5rem 1rem;
+            border-radius: 0.25rem;
+            font-weight: bold;
+            color: #fff;
+            text-decoration: none;
+            width: 100%;
+            text-align: center;
+        }
+
+        #download-modal a.video-link {
+            background-color: #ef4444; /* Red for video */
+        }
+        
+        #download-modal a.video-link:hover {
+            background-color: #dc2626;
+        }
+
+        #download-modal a.photo-link {
+            background-color: #3b82f6; /* Blue for photo */
+        }
+        
+        #download-modal a.photo-link:hover {
+            background-color: #2563eb;
+        }
+
+        #download-modal button.close {
+            background-color: #6b7280;
+            padding: 0.5rem 1rem;
+            border-radius: 0.25rem;
+            font-weight: bold;
+            transition: background-color 0.2s;
+            margin-top: 1rem;
+        }
+        #download-modal button.close:hover {
+            background-color: #4b5563;
+        }
+
+    </style>
+</head>
+<body class="bg-black text-white">
+
+    <div id="app-container">
+        <!-- Live camera feed rendered on this canvas -->
+        <canvas id="main-canvas" width="640" height="480"></canvas>
+        <video id="camera-source" playsinline autoplay muted></video>
+        
+        <!-- Static background for replay mode -->
+        <div id="replay-background" class="hidden absolute inset-0 bg-gray-900 z-[5]"></div>
+
+        <!-- Overlays for data and controls -->
+        <div id="overlay">
+            
+            <!-- Direction Ribbon -->
+            <div id="direction-ribbon-container">
+                <div id="direction-ribbon"></div>
+                <div id="heading-indicator"></div>
+            </div>
+
+            <!-- Main data panels -->
+            <div class="flex-grow flex flex-col justify-between">
+                <div class="flex justify-between items-start">
+                    <!-- Left Panel: Location Data -->
+                    <div id="left-panel" class="glass-panel text-left">
+                        <!-- Coordinates now on two separate lines -->
+                        <div id="coords"></div>
+                        <div id="elevation">ELEV: ---- ft</div>
+                        <div id="wind">WIND: ---/-- KT</div>
+                        <div id="temp">TEMP: --°C</div>
+                    </div>
+                    <!-- Right Panel: Time & Enviro Data -->
+                    <div id="right-panel" class="glass-panel text-right">
+                        <!-- TIME will remain -->
+                        <div id="time">TIME: --:--:--</div>
+                        <!-- The 3 nearest prominent airports will be displayed here -->
+                        <div id="airports-data"></div>
+                    </div>
+                </div>
+
+                <!-- Controls -->
+                <!-- The buttons are now positioned with more spacing at the top -->
+                <div class="flex flex-col items-center p-4">
+                    <!-- Main Action Buttons -->
+                     <div class="flex items-center space-x-8 mb-4">
+                        <button id="share-button" title="Share" class="w-12 h-12 bg-blue-500 rounded-full flex items-center justify-center text-white shadow-lg"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"></circle><circle cx="6" cy="12" r="3"></circle><circle cx="18" cy="19" r="3"></circle><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line></svg></button>
+                        <button id="record-button" title="Record Video" class="control-button bg-red-600">
+                            <div class="w-6 h-6 bg-red-800 rounded-full"></div>
+                        </button>
+                        <button id="save-button" title="Save Assessment" class="control-button bg-green-600">
+                            <svg class="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4"></path></svg>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Bottom Saved Assessments List - Transparency reduced to 0.4 -->
+            <div id="saved-assessments" class="bg-black bg-opacity-40 p-2">
+                <h3 class="text-center text-sm font-bold border-b border-gray-600 pb-1 mb-1">SAVED ASSESSMENTS</h3>
+                <div id="saved-list">
+                    <!-- Saved items will be populated here -->
+                </div>
+            </div>
+             <button id="exit-replay-button" class="hidden absolute bottom-24 left-1/2 -translate-x-1/2 bg-blue-500 px-4 py-2 rounded-full text-sm z-50">RETURN TO LIVE VIEW</button>
+        </div>
+
+        <!-- Map container (hidden by default) -->
+        <div id="map-container" class="hidden absolute inset-0 z-20">
+            <iframe id="map-iframe" width="100%" height="100%" frameborder="0" scrolling="no" marginheight="0" marginwidth="0"></iframe>
+            <!-- New HIDE MAP button at the bottom of the map view -->
+            <button id="hide-map-button" class="absolute bottom-4 left-1/2 -translate-x-1/2 bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-6 rounded-full text-sm transition-colors">HIDE MAP</button>
+        </div>
+
+        <!-- Message popup -->
+        <div id="message-popup" class="hidden absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 glass-panel z-50 px-6 py-4 text-center">
+            <p id="message-text"></p>
+        </div>
+
+    </div>
+
+    <script type="module">
+        // --- DOM ELEMENT REFERENCES ---
+        const cameraSource = document.getElementById('camera-source');
+        const mainCanvas = document.getElementById('main-canvas');
+        const ctx = mainCanvas.getContext('2d');
+        const overlay = document.getElementById('overlay');
+        const directionRibbon = document.getElementById('direction-ribbon');
+        const coordsEl = document.getElementById('coords');
+        const elevationEl = document.getElementById('elevation');
+        const windEl = document.getElementById('wind');
+        const tempEl = document.getElementById('temp');
+        const timeEl = document.getElementById('time');
+        const airportsDataEl = document.getElementById('airports-data');
+        const recordButton = document.getElementById('record-button');
+        const saveButton = document.getElementById('save-button');
+        const shareButton = document.getElementById('share-button');
+        const mapContainer = document.getElementById('map-container');
+        const mapIframe = document.getElementById('map-iframe');
+        const savedListContainer = document.getElementById('saved-list');
+        const messagePopup = document.getElementById('message-popup');
+        const messageText = document.getElementById('message-text');
+        const replayBackground = document.getElementById('replay-background');
+        const exitReplayButton = document.getElementById('exit-replay-button');
+
+
+        // --- STATE & CONFIGURATION ---
+        let isRecording = false;
+        let mediaRecorder;
+        let recordedChunks = [];
+        let isReplayMode = false;
+        let currentHeading = 0;
+        let cameraStream = null;
+        let lastSnapshotURL = null;
+        let lastVideoBlob = null;
+
+        const PIXELS_PER_DEGREE = 10;
+        const MOCK_LOCATION = {
+            lat: 28.6558,
+            lon: 77.2342,
+            coords_dms: "28° 39' 21\" N, 77° 14' 03\" E",
+            elevation: '725 ft',
+            wind: '270/05 KT',
+            temp: '28°C'
+        };
+        
+        // Mock airport data for the Ludhiana area
+        const MOCK_AIRPORTS = [
+            { id: 'VIAR', name: 'Amritsar Airport', lat: 31.7003, lon: 74.7951 },
+            { id: 'VIDP', name: 'Delhi Airport', lat: 28.5562, lon: 77.1009 },
+            { id: 'VIJK', name: 'Jammu Airport', lat: 32.684, lon: 74.8373 },
+            { id: 'VILK', name: 'Ludhiana Airport', lat: 30.8549, lon: 75.9521 },
+        ];
+
+
+        // --- CORE FUNCTIONS ---
+        
+        // Converts a decimal coordinate to Degrees, Minutes, Seconds format
+        function toDMS(decimal, isLat) {
+            const absolute = Math.abs(decimal);
+            const degrees = Math.floor(absolute);
+            const minutesNotRounded = (absolute - degrees) * 60;
+            const minutes = Math.floor(minutesNotRounded);
+            const seconds = Math.round((minutesNotRounded - minutes) * 60);
+            
+            // Determine cardinal direction
+            let cardinal = '';
+            if (isLat) {
+                cardinal = decimal >= 0 ? 'N' : 'S';
+            } else {
+                cardinal = decimal >= 0 ? 'E' : 'W';
+            }
+            
+            return `${degrees}° ${minutes}' ${seconds}" ${cardinal}`;
+        }
+
+        // Initialize Camera
+        async function setupCamera() {
+            try {
+                const constraints = { video: { facingMode: 'environment' }, audio: false };
+                cameraStream = await navigator.mediaDevices.getUserMedia(constraints);
+                cameraSource.srcObject = cameraStream;
+                startCanvasRender();
+            } catch (err) {
+                console.error("Error accessing camera:", err);
+                showMessage("Could not access camera. Please grant permission.", 5000);
+            }
+        }
+        
+        // Stop Camera
+        function stopCamera() {
+            if (cameraStream) {
+                cameraStream.getTracks().forEach(track => track.stop());
+                cameraSource.srcObject = null;
+            }
+        }
+
+        // Handle Device Orientation
+        function handleOrientation(event) {
+            // The 'alpha' value is the compass direction in degrees
+            let heading = event.webkitCompassHeading || Math.abs(event.alpha - 360);
+            currentHeading = heading;
+
+            const offset = (window.innerWidth / 2) - (heading * PIXELS_PER_DEGREE);
+            directionRibbon.style.transform = `translateX(${offset}px)`;
+        }
+        
+        // Function to draw the video and data onto the canvas
+        function drawCanvas() {
+            if (cameraSource.readyState === 4) {
+                ctx.drawImage(cameraSource, 0, 0, mainCanvas.width, mainCanvas.height);
+                
+                // Draw data overlay on the canvas
+                const data = { ...MOCK_LOCATION, time: new Date().toLocaleTimeString() };
+                const padding = 10;
+                const fontSize = 16;
+                const lineHeight = fontSize + 5;
+                let textY = padding + fontSize;
+
+                // Set font style
+                ctx.font = `${fontSize}px 'Roboto Mono', monospace`;
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+
+                // Draw coordinates
+                const latDMS = toDMS(data.lat, true);
+                const lonDMS = toDMS(data.lon, false);
+                ctx.fillText(`LAT: ${latDMS}`, padding, textY);
+                textY += lineHeight;
+                ctx.fillText(`LON: ${lonDMS}`, padding, textY);
+                textY += lineHeight;
+
+                // Draw wind, temp, and time
+                ctx.fillText(`WIND: ${data.wind}`, padding, textY);
+                textY += lineHeight;
+                ctx.fillText(`TEMP: ${data.temp}`, padding, textY);
+                textY += lineHeight;
+                ctx.fillText(`TIME: ${data.time}`, padding, textY);
+            }
+            if (!isReplayMode) {
+                 requestAnimationFrame(drawCanvas);
+            }
+        }
+        
+        function startCanvasRender() {
+            cameraSource.addEventListener('play', function() {
+                mainCanvas.width = cameraSource.videoWidth;
+                mainCanvas.height = cameraSource.videoHeight;
+                drawCanvas();
+            }, { once: true });
+        }
+        
+        // Update Time Display
+        function updateTime() {
+            const now = new Date();
+            timeEl.textContent = `TIME: ${now.toLocaleTimeString()}`;
+        }
+        
+        // Show a temporary message to the user
+        function showMessage(message, duration = 3000) {
+            messageText.textContent = message;
+            messagePopup.classList.remove('hidden');
+            setTimeout(() => {
+                messagePopup.classList.add('hidden');
+            }, duration);
+        }
+
+        // Render the list of saved assessments from localStorage
+        function renderSavedAssessments() {
+            const assessments = JSON.parse(localStorage.getItem('helipadAssessments')) || [];
+            savedListContainer.innerHTML = '';
+            if (assessments.length === 0) {
+                savedListContainer.innerHTML = '<p class="text-center text-xs text-gray-400">No saved assessments yet.</p>';
+                return;
+            }
+            assessments.reverse().forEach((assessment, index) => {
+                const item = document.createElement('div');
+                item.className = 'bg-gray-800 p-2 rounded mb-1 cursor-pointer hover:bg-green-800 transition-colors';
+                item.innerHTML = `<p class="text-xs font-bold">${new Date(assessment.timestamp).toLocaleString()}</p>
+                                 <p class="text-xs text-gray-300">${assessment.data.coords_dms}</p>`;
+                item.onclick = () => enterReplayMode(assessment);
+                savedListContainer.appendChild(item);
+            });
+        }
+        
+        function updateDisplay(data) {
+              // Updated to display latitude and longitude in DMS on separate lines
+              const latDMS = toDMS(data.lat, true);
+              const lonDMS = toDMS(data.lon, false);
+              coordsEl.innerHTML = `LAT: ${latDMS}<br>LON: ${lonDMS}`;
+              elevationEl.textContent = `ELEV: ${data.elevation}`;
+              windEl.textContent = `WIND: ${data.wind}`;
+              tempEl.textContent = `TEMP: ${data.temp}`;
+        }
+        
+        function enterReplayMode(assessment) {
+            isReplayMode = true;
+            stopCamera();
+            mainCanvas.classList.add('hidden');
+            replayBackground.classList.remove('hidden');
+            exitReplayButton.classList.remove('hidden');
+            
+            updateDisplay(assessment.data);
+            
+            // The time element in replay mode will be populated by the saved timestamp
+            const savedDate = new Date(assessment.timestamp);
+            timeEl.textContent = `TIME: ${savedDate.toLocaleTimeString()}`;
+            
+            // Update the radial distance data for the replay
+            updateRadialDistance(assessment.data.lat, assessment.data.lon);
+            
+            showMessage(`Displaying saved assessment from ${savedDate.toLocaleString()}`);
+        }
+        
+        function exitReplayMode() {
+            isReplayMode = false;
+            setupCamera(); // Restart camera
+            mainCanvas.classList.remove('hidden');
+            replayBackground.classList.add('hidden');
+            exitReplayButton.classList.add('hidden');
+            
+            updateDisplay(MOCK_LOCATION); // revert to live mock data
+            updateTime(); // restart live clock
+            updateRadialDistance(MOCK_LOCATION.lat, MOCK_LOCATION.lon);
+            
+            showMessage("Returned to live view");
+        }
+        
+        // --- GEOSPATIAL CALCULATIONS ---
+
+        // Convert degrees to radians
+        const toRad = deg => deg * Math.PI / 180;
+        
+        // Haversine formula to calculate distance between two lat/lon points
+        function haversineDistance(lat1, lon1, lat2, lon2) {
+            const R = 6371e3; // metres
+            const φ1 = toRad(lat1);
+            const φ2 = toRad(lat2);
+            const Δφ = toRad(lat2 - lat1);
+            const Δλ = toRad(lon2 - lon1);
+
+            const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
+                      Math.cos(φ1) * Math.cos(φ2) *
+                      Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+            const distanceMeters = R * c;
+            const distanceNauticalMiles = distanceMeters / 1852; // 1 nautical mile = 1852 meters
+            return distanceNauticalMiles;
+        }
+
+        // Calculate initial bearing between two lat/lon points
+        function calculateBearing(lat1, lon1, lat2, lon2) {
+            const φ1 = toRad(lat1);
+            const φ2 = toRad(lat2);
+            const λ1 = toRad(lon1);
+            const λ2 = toRad(lon2);
+            
+            const y = Math.sin(λ2 - λ1) * Math.cos(φ2);
+            const x = Math.cos(φ1) * Math.sin(φ2) -
+                      Math.sin(φ1) * Math.cos(φ2) * Math.cos(λ2 - λ1);
+            
+            const bearing = Math.atan2(y, x);
+            return (bearing * 180 / Math.PI + 360) % 360; // Convert to degrees and normalize
+        }
+
+        // Updates the radial distance data displayed in the right panel
+        function updateRadialDistance(currentLat, currentLon) {
+            const airportDistances = MOCK_AIRPORTS.map(airport => {
+                const dist = haversineDistance(currentLat, currentLon, airport.lat, airport.lon);
+                const bearing = calculateBearing(currentLat, currentLon, airport.lat, airport.lon);
+                return {
+                    id: airport.id,
+                    name: airport.name,
+                    distance: dist,
+                    bearing: bearing
+                };
+            });
+
+            // Sort airports by distance and get the top 3
+            airportDistances.sort((a, b) => a.distance - b.distance);
+            const nearestAirports = airportDistances.slice(0, 3);
+
+            let htmlContent = '';
+            if (nearestAirports.length > 0) {
+                // Generate a row for each airport
+                nearestAirports.forEach(airport => {
+                    const formattedBearing = String(Math.round(airport.bearing)).padStart(3, '0');
+                    const formattedDistance = Math.round(airport.distance);
+                    htmlContent += `<p>${airport.id}: ${formattedBearing}° / ${formattedDistance} NM</p>`;
+                });
+            } else {
+                 htmlContent = `<p>NO AIRPORTS FOUND</p>`;
+            }
+
+            airportsDataEl.innerHTML = htmlContent;
+        }
+
+        // --- CUSTOM MODAL FOR SHARING ---
+        function showDownloadModal() {
+            const modalHtml = `
+                <div id="download-modal">
+                    <div class="content">
+                        <h3 class="text-xl font-bold mb-4">Download Assessment Files</h3>
+                        <p class="mb-4">Use the links below to download your recorded files.</p>
+                        <div class="actions">
+                            ${lastVideoBlob ? `<a href="${URL.createObjectURL(lastVideoBlob)}" download="helipad_video.webm" class="video-link">Download Video</a>` : ''}
+                            ${lastSnapshotURL ? `<a href="${lastSnapshotURL}" download="helipad_snapshot.jpeg" class="photo-link">Download Snapshot</a>` : ''}
+                            <button id="close-modal-button" class="close">Close</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            // Remove any existing modal to prevent duplicates
+            const existingModal = document.getElementById('download-modal');
+            if (existingModal) existingModal.remove();
+            
+            document.body.insertAdjacentHTML('beforeend', modalHtml);
+
+            const closeModalButton = document.getElementById('close-modal-button');
+            
+            closeModalButton.addEventListener('click', () => {
+                document.getElementById('download-modal').remove();
+            });
+        }
+
+
+        // --- EVENT LISTENERS ---
+
+        // Record Button
+        recordButton.addEventListener('click', async () => {
+            if (isReplayMode) return;
+
+            if (isRecording) {
+                // Stop the recording
+                isRecording = false;
+                recordButton.classList.remove('recording');
+                const innerCircle = recordButton.querySelector('div');
+                innerCircle.classList.add('rounded-full');
+                innerCircle.classList.remove('rounded-sm');
+                if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                    mediaRecorder.stop();
+                }
+            } else {
+                // Start the recording process
+                isRecording = true;
+                recordButton.classList.add('recording');
+                const innerCircle = recordButton.querySelector('div');
+                innerCircle.classList.remove('rounded-full');
+                innerCircle.classList.add('rounded-sm');
+                showMessage('Recording video and taking snapshot...');
+
+                // 1. Capture snapshot with overlay from the main canvas
+                lastSnapshotURL = mainCanvas.toDataURL('image/jpeg', 1.0);
+                
+                // 2. Start video recording from the raw camera stream
+                const stream = cameraSource.captureStream(25); // 25 fps
+                mediaRecorder = new MediaRecorder(stream, { mimeType: 'video/webm; codecs=vp9' });
+                recordedChunks = [];
+                
+                mediaRecorder.ondataavailable = (event) => {
+                    if (event.data.size > 0) {
+                        recordedChunks.push(event.data);
+                    }
+                };
+                
+                mediaRecorder.onstop = () => {
+                    lastVideoBlob = new Blob(recordedChunks, { type: 'video/webm' });
+                    showMessage('Recording complete. Files ready to be shared.', 5000);
+                };
+                
+                mediaRecorder.start();
+            }
+        });
+        
+        // Save Button
+        saveButton.addEventListener('click', () => {
+              if (isReplayMode) return;
+              const timestamp = new Date().toISOString();
+              const assessments = JSON.parse(localStorage.getItem('helipadAssessments')) || [];
+              const newAssessment = {
+                  timestamp: timestamp,
+                  data: { ...MOCK_LOCATION, lat: MOCK_LOCATION.lat, lon: MOCK_LOCATION.lon }
+              };
+              assessments.push(newAssessment);
+              localStorage.setItem('helipadAssessments', JSON.stringify(assessments));
+              renderSavedAssessments();
+              showMessage('Current assessment saved!');
+        });
+        
+        // Share Button
+        shareButton.addEventListener('click', () => {
+            if (!lastSnapshotURL && !lastVideoBlob) {
+                 showMessage("Please record a video and take a snapshot first.", 5000);
+                 return;
+            }
+            
+            showDownloadModal();
+        });
+
+        // Exit Replay Button
+        exitReplayButton.addEventListener('click', exitReplayMode);
+
+        // --- INITIALIZATION ---
+        function initialize() {
+            // 1. Set up camera and orientation listener
+            setupCamera();
+            if (window.DeviceOrientationEvent) {
+                // For iOS, we need to request permission
+                if (typeof DeviceOrientationEvent.requestPermission === 'function') {
+                    overlay.addEventListener('click', () => {
+                        DeviceOrientationEvent.requestPermission()
+                        .then(permissionState => {
+                            if (permissionState === 'granted') {
+                                window.addEventListener('deviceorientation', handleOrientation);
+                            }
+                        }).catch(console.error);
+                    }, { once: true });
+                      showMessage('Tap screen to enable compass.', 5000);
+                } else {
+                      window.addEventListener('deviceorientation', handleOrientation);
+                }
+            } else {
+                console.warn("DeviceOrientation not supported.");
+            }
+            
+            // 2. Create direction ribbon markers
+            const ribbonWidth = 360 * PIXELS_PER_DEGREE;
+            directionRibbon.style.width = `${ribbonWidth}px`;
+            for (let i = 0; i < 360; i++) {
+                if (i % 90 === 0) { // Cardinal Directions (N, E, S, W)
+                    const label = document.createElement('div');
+                    label.className = 'ribbon-label';
+                    const cardinal = {0: 'N', 90: 'E', 180: 'S', 270: 'W'}[i];
+                    // Updated HTML to use the new cardinal-text class
+                    label.innerHTML = `<p class="cardinal-text">${cardinal}</p><div class="tick-cardinal"></div>`;
+                    directionRibbon.appendChild(label);
+                } else if (i % 15 === 0) { // Major degree markers
+                    const label = document.createElement('div');
+                    label.className = 'ribbon-label';
+                    label.innerHTML = `<p class="degree-text">${String(i).padStart(3, '0')}</p><div class="tick-major"></div>`;
+                    directionRibbon.appendChild(label);
+                } else if (i % 5 === 0) { // Minor degree markers
+                      const marker = document.createElement('div');
+                      marker.className = 'ribbon-marker';
+                      marker.style.height = '20px';
+                      directionRibbon.appendChild(marker);
+                }
+            }
+            
+            // 3. Set static/mock data
+            updateDisplay(MOCK_LOCATION);
+            
+            // 4. Update the radial distance data on startup
+            updateRadialDistance(MOCK_LOCATION.lat, MOCK_LOCATION.lon);
+
+            // 5. Start the clock
+            updateTime();
+            setInterval(updateTime, 1000);
+
+            // 6. Load saved assessments
+            renderSavedAssessments();
+        }
+
+        initialize();
+    </script>
+</body>
+</html>
